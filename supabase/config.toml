@@ -1,0 +1,41 @@
+project_id = "capsule"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "storage"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 15
+
+[studio]
+enabled = true
+port = 54323
+
+[storage]
+enabled = true
+file_size_limit = "500MiB"
+
+[auth]
+enabled = true
+site_url = "https://capsule.app"
+additional_redirect_urls = ["capsule://auth-callback", "https://capsule.app/auth/callback"]
+jwt_expiry = 3600
+enable_signup = true
+
+[auth.external.apple]
+enabled = true
+client_id = "env(SUPABASE_AUTH_APPLE_CLIENT_ID)"
+secret = "env(SUPABASE_AUTH_APPLE_SECRET)"
+
+[auth.email]
+enable_signup = true
+double_confirm_changes = true
+enable_confirmations = false
+
+[realtime]
+enabled = true

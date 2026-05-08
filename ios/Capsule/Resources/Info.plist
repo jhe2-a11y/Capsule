@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleDisplayName</key>
+    <string>Capsule</string>
+    <key>CFBundleExecutable</key>
+    <string>$(EXECUTABLE_NAME)</string>
+    <key>CFBundleIdentifier</key>
+    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>$(PRODUCT_NAME)</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSRequiresIPhoneOS</key>
+    <true/>
+    <key>UILaunchScreen</key>
+    <dict/>
+    <key>UIRequiredDeviceCapabilities</key>
+    <array>
+        <string>arm64</string>
+        <string>nfc</string>
+    </array>
+    <key>UISupportedInterfaceOrientations</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+    </array>
+    <key>NFCReaderUsageDescription</key>
+    <string>Capsule reads NFC chips to open your memories.</string>
+    <key>NSCameraUsageDescription</key>
+    <string>Capsule needs the camera to capture moments for your memories.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Capsule needs the microphone to record voice memories.</string>
+    <key>NSPhotoLibraryAddUsageDescription</key>
+    <string>Capsule saves shared moments to your library when you ask.</string>
+    <key>com.apple.developer.nfc.readersession.formats</key>
+    <array>
+        <string>NDEF</string>
+        <string>TAG</string>
+    </array>
+    <key>com.apple.developer.associated-domains</key>
+    <array>
+        <string>applinks:capsule.app</string>
+    </array>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>app.capsule.scheme</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>capsule</string>
+            </array>
+        </dict>
+    </array>
+</dict>
+</plist>

@@ -1,0 +1,38 @@
+# macOS
+.DS_Store
+*.swp
+*~
+
+# Xcode
+build/
+DerivedData/
+xcuserdata/
+*.xcodeproj/
+*.xcworkspace/
+*.xcuserstate
+Pods/
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+.vercel/
+
+# Env / secrets
+.env
+.env.local
+.env.development
+.env.production
+
+# Supabase
+.branches
+.temp
+
+# Editors
+.vscode/
+.idea/

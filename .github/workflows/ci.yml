@@ -1,0 +1,92 @@
+name: ci
+
+on:
+  push:
+    branches: [main, "claude/**"]
+  pull_request:
+
+jobs:
+  web:
+    name: web-viewer
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web-viewer
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web-viewer/package-lock.json
+      - run: npm ci || npm install
+      - run: npm run typecheck
+
+  supabase:
+    name: supabase-migrations
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply migrations
+        env:
+          PGPASSWORD: postgres
+        run: |
+          # The migrations reference auth.users + storage; in CI we stub those
+          # schemas so the SQL still type-checks (for full RLS tests run
+          # `supabase start` locally).
+          psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 <<'SQL'
+          create schema if not exists auth;
+          create table if not exists auth.users (
+            id uuid primary key,
+            email text
+          );
+          create schema if not exists storage;
+          create table if not exists storage.buckets (
+            id text primary key, name text, public boolean,
+            file_size_limit bigint
+          );
+          create table if not exists storage.objects (
+            id uuid primary key default gen_random_uuid(),
+            bucket_id text references storage.buckets(id),
+            name text, owner uuid
+          );
+          create or replace function auth.uid() returns uuid
+            language sql stable as $$ select null::uuid $$;
+          do $do$ begin
+            create publication supabase_realtime;
+          exception when duplicate_object then null;
+          end $do$;
+          SQL
+          for f in supabase/migrations/*.sql; do
+            echo "applying $f"
+            psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -f "$f"
+          done
+
+  ios:
+    name: ios-build
+    runs-on: macos-14
+    if: false  # gated until project.yml is generated into a real .xcodeproj
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install xcodegen
+      - working-directory: ios
+        run: xcodegen generate
+      - working-directory: ios
+        run: |
+          xcodebuild \
+            -project Capsule.xcodeproj \
+            -scheme Capsule \
+            -destination 'platform=iOS Simulator,name=iPhone 15' \
+            -configuration Debug \
+            build test
