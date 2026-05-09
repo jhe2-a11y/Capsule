@@ -5,11 +5,11 @@ import { browserClient } from "@/lib/supabase/client";
 
 export default function SignIn({
   searchParams,
-}: { searchParams: { next?: string } }) {
+}: { searchParams?: { next?: string } }) {
   const [email, setEmail] = useState("");
   const [sent, setSent] = useState(false);
   const [working, setWorking] = useState(false);
-  const next = searchParams.next ?? "/";
+  const next = searchParams?.next ?? "/";
 
   async function send() {
     if (!email || working) return;

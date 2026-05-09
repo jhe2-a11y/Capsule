@@ -82,7 +82,6 @@ function MemoryQuad({
 }) {
   const ref = useRef<THREE.Mesh>(null);
   const [url, setUrl] = useState<string | null>(null);
-  const [hovered, setHovered] = useState(false);
 
   useEffect(() => {
     let live = true;
@@ -108,8 +107,6 @@ function MemoryQuad({
       ref={ref}
       position={[memory.pos_x, memory.pos_y, memory.pos_z * 0.6]}
       onClick={(e) => { e.stopPropagation(); onClick(); }}
-      onPointerOver={() => setHovered(true)}
-      onPointerOut={() => setHovered(false)}
     >
       <planeGeometry args={[0.42, 0.52]} />
       <meshBasicMaterial

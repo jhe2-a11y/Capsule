@@ -1,4 +1,3 @@
-import { notFound } from "next/navigation";
 import { serverClient } from "@/lib/supabase/client";
 import type { CapsuleRow, MemoryRow } from "@/lib/depthField/types";
 import { CapsuleViewer } from "./CapsuleViewer";
@@ -10,30 +9,33 @@ interface Props { params: { id: string } }
 export default async function Page({ params }: Props) {
   const supabase = serverClient();
 
-  const { data: capsule, error: cErr } = await supabase
+  const cRes = await supabase
     .from("capsules")
     .select("*")
     .eq("id", params.id)
-    .maybeSingle<CapsuleRow>();
+    .maybeSingle();
 
-  if (cErr) {
-    return <FailureScreen kind="error" />;
+  if (cRes.error) {
+    return <FailureScreen />;
   }
 
-  // RLS will return null both for "not found" and "private + not allowed".
-  // From the consumer's perspective both should surface the private state.
+  const capsule = cRes.data as CapsuleRow | null;
+
+  // RLS returns null both for "not found" and "private + not allowed". From
+  // the consumer's perspective both surface the private state.
   if (!capsule) {
     return <PrivateOrMissing capsuleID={params.id} />;
   }
 
-  const { data: memories } = await supabase
+  const mRes = await supabase
     .from("memories")
     .select("*")
     .eq("capsule_id", capsule.id)
-    .order("created_at", { ascending: true })
-    .returns<MemoryRow[]>();
+    .order("created_at", { ascending: true });
 
-  return <CapsuleViewer capsule={capsule} memories={memories ?? []} />;
+  const memories = (mRes.data ?? []) as MemoryRow[];
+
+  return <CapsuleViewer capsule={capsule} memories={memories} />;
 }
 
 function PrivateOrMissing({ capsuleID }: { capsuleID: string }) {
@@ -65,7 +67,7 @@ function PrivateOrMissing({ capsuleID }: { capsuleID: string }) {
   );
 }
 
-function FailureScreen({ kind }: { kind: "error" }) {
+function FailureScreen() {
   return (
     <main style={{
       height: "100vh", display: "flex", alignItems: "center",

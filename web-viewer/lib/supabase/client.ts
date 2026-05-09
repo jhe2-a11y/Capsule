@@ -1,5 +1,4 @@
-import { createBrowserClient } from "@supabase/ssr";
-import { createServerClient, type CookieOptions } from "@supabase/ssr";
+import { createBrowserClient, createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 
 export function browserClient() {
@@ -16,12 +15,22 @@ export function serverClient() {
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
       cookies: {
-        get: (name: string) => store.get(name)?.value,
-        set: (name: string, value: string, options: CookieOptions) => {
-          try { store.set({ name, value, ...options }); } catch {}
+        getAll() {
+          return store.getAll();
         },
-        remove: (name: string, options: CookieOptions) => {
-          try { store.set({ name, value: "", ...options }); } catch {}
+        setAll(items) {
+          // In RSC contexts cookies() is read-only; setAll is invoked by the
+          // SSR helper during refresh and is a no-op there. Wrapping in
+          // try/catch lets the same factory work for both pages and route
+          // handlers without splitting into two clients.
+          try {
+            for (const { name, value, options } of items) {
+              (store as unknown as { set: (n: string, v: string, o?: unknown) => void })
+                .set(name, value, options);
+            }
+          } catch {
+            // intentionally ignored
+          }
         },
       },
     },
