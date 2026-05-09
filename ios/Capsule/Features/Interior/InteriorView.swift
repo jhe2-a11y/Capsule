@@ -181,7 +181,7 @@ private struct ComposeTray: View {
                     }
                     .padding(.horizontal, 24)
                     .padding(.vertical, 18)
-                    .background(.ultraThinMaterial, in: Capsule())
+                    .background(.ultraThinMaterial, in: SwiftUI.Capsule())
                     .transition(.opacity.combined(with: .scale(scale: 0.95)))
                 }
             }

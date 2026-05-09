@@ -28,7 +28,7 @@ struct LibraryView: View {
                                 .foregroundStyle(.white.opacity(0.85))
                                 .padding(.horizontal, 18)
                                 .padding(.vertical, 12)
-                                .background(.ultraThinMaterial, in: Capsule())
+                                .background(.ultraThinMaterial, in: SwiftUI.Capsule())
                         }
 
                         Button(action: signOut) {

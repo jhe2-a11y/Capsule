@@ -38,14 +38,14 @@ struct PrivateBlockedView: View {
                         .font(.system(.body, design: .serif))
                         .foregroundStyle(.white.opacity(0.6))
                         .frame(maxWidth: .infinity, minHeight: 52)
-                        .background(.white.opacity(0.04), in: Capsule())
+                        .background(.white.opacity(0.04), in: SwiftUI.Capsule())
                 }
                 Button(action: request) {
                     Text(requested ? "Sent" : (working ? "…" : "Request access"))
                         .font(.system(.body, design: .serif))
                         .foregroundStyle(.black)
                         .frame(maxWidth: .infinity, minHeight: 52)
-                        .background(.white.opacity(0.92), in: Capsule())
+                        .background(.white.opacity(0.92), in: SwiftUI.Capsule())
                 }
                 .disabled(requested || working)
             }

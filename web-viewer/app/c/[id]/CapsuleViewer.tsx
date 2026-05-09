@@ -1,8 +1,10 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { CapsuleRow, MemoryRow } from "@/lib/depthField/types";
+import { Foreground } from "@/lib/depthField/Foreground";
+import { browserClient } from "@/lib/supabase/client";
 
 const DepthFieldScene = dynamic(
   () => import("@/lib/depthField/Scene").then((m) => m.DepthFieldScene),
@@ -14,7 +16,16 @@ interface Props {
   memories: MemoryRow[];
 }
 
-export function CapsuleViewer({ capsule, memories }: Props) {
+export function CapsuleViewer({ capsule, memories: initial }: Props) {
+  const [memories, setMemories] = useState<MemoryRow[]>(initial);
+  const [focused, setFocused] = useState<string | null>(null);
+  const [appPrompt, setAppPrompt] = useState<boolean>(true);
+
+  const focusedMemory = useMemo(
+    () => memories.find((m) => m.id === focused) ?? null,
+    [memories, focused],
+  );
+
   const resolveURL = useCallback(async (memoryID: string): Promise<string | null> => {
     try {
       const r = await fetch("/api/memory-url", {
@@ -30,13 +41,78 @@ export function CapsuleViewer({ capsule, memories }: Props) {
     }
   }, []);
 
-  const [appPrompt, setAppPrompt] = useState<boolean>(true);
+  // Live updates: another owner / collaborator editing this capsule on iOS or
+  // another browser session causes new nodes to materialize here without a
+  // refresh. The Realtime channel mirrors the iOS one (capsule:<id>).
+  useEffect(() => {
+    const supabase = browserClient();
+    const channel = supabase.channel(`capsule:${capsule.id}`);
+
+    channel
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "memories",
+          filter: `capsule_id=eq.${capsule.id}` },
+        (payload) => {
+          const row = payload.new as MemoryRow;
+          setMemories((prev) =>
+            prev.some((m) => m.id === row.id) ? prev : [...prev, row]);
+        },
+      )
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "memories",
+          filter: `capsule_id=eq.${capsule.id}` },
+        (payload) => {
+          const row = payload.new as MemoryRow;
+          setMemories((prev) => prev.map((m) => (m.id === row.id ? row : m)));
+        },
+      )
+      .on(
+        "postgres_changes",
+        { event: "DELETE", schema: "public", table: "memories",
+          filter: `capsule_id=eq.${capsule.id}` },
+        (payload) => {
+          const oldRow = payload.old as Partial<MemoryRow>;
+          if (!oldRow.id) return;
+          setMemories((prev) => prev.filter((m) => m.id !== oldRow.id));
+          setFocused((cur) => (cur === oldRow.id ? null : cur));
+        },
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [capsule.id]);
+
+  // Esc closes the foreground overlay (parity with the iOS swipe-down).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setFocused(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   return (
     <main style={{ height: "100vh", position: "relative" }}>
-      <DepthFieldScene memories={memories} resolveURL={resolveURL} />
+      <DepthFieldScene
+        memories={memories}
+        resolveURL={resolveURL}
+        focused={focused}
+        onFocusChange={setFocused}
+      />
 
-      {appPrompt && (
+      {focusedMemory && (
+        <Foreground
+          memory={focusedMemory}
+          resolveURL={resolveURL}
+          onDismiss={() => setFocused(null)}
+        />
+      )}
+
+      {appPrompt && !focusedMemory && (
         <div
           style={{
             position: "absolute", bottom: 28, left: 0, right: 0,

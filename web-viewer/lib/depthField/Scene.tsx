@@ -13,23 +13,23 @@ import type { MemoryRow } from "./types";
 interface SceneProps {
   memories: MemoryRow[];
   resolveURL: (memoryId: string) => Promise<string | null>;
+  focused: string | null;
+  onFocusChange: (id: string | null) => void;
 }
 
-export function DepthFieldScene({ memories, resolveURL }: SceneProps) {
-  const [focused, setFocused] = useState<string | null>(null);
-
+export function DepthFieldScene({ memories, resolveURL, focused, onFocusChange }: SceneProps) {
   return (
     <Canvas
       gl={{ antialias: true, alpha: false }}
       camera={{ position: [0, 0, 2.4], fov: 38 }}
       dpr={[1, 2]}
       style={{ background: "linear-gradient(180deg,#0a0a0f 0%,#1a1018 100%)" }}
-      onPointerMissed={() => setFocused(null)}
+      onPointerMissed={() => onFocusChange(null)}
     >
       <ambientLight intensity={0.5} />
       <directionalLight position={[3, 4, 5]} intensity={0.6} />
       <Suspense fallback={null}>
-        <Field memories={memories} focused={focused} setFocused={setFocused} resolveURL={resolveURL} />
+        <Field memories={memories} focused={focused} setFocused={onFocusChange} resolveURL={resolveURL} />
       </Suspense>
       <Parallax />
     </Canvas>
