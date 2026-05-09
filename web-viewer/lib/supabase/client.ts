@@ -1,4 +1,8 @@
-import { createBrowserClient, createServerClient } from "@supabase/ssr";
+import {
+  createBrowserClient,
+  createServerClient,
+  type CookieOptions,
+} from "@supabase/ssr";
 import { cookies } from "next/headers";
 
 export function browserClient() {
@@ -18,7 +22,7 @@ export function serverClient() {
         getAll() {
           return store.getAll();
         },
-        setAll(items) {
+        setAll(items: { name: string; value: string; options?: CookieOptions }[]) {
           // In RSC contexts cookies() is read-only; setAll is invoked by the
           // SSR helper during refresh and is a no-op there. Wrapping in
           // try/catch lets the same factory work for both pages and route
