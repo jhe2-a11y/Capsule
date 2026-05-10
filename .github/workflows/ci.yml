@@ -127,48 +127,72 @@ jobs:
             -project Capsule.xcodeproj \
             -scheme Capsule
 
-      # Discover an available iPhone simulator name + runtime via jq
-      # (preinstalled on macos-14). Avoids hardcoding "iPhone 15", which
-      # may not be the latest device on a given runner image.
+      # Discover an available iPhone simulator's UDID + name via jq
+      # (preinstalled on macos-14). Avoids hardcoding device names and
+      # avoids the `name=...,OS=latest` matching pitfalls — passing the
+      # UDID directly resolves to exactly one destination.
       - name: Pick a simulator
         id: sim
         run: |
           set -euo pipefail
           xcrun simctl list devices available -j > /tmp/sims.json
-          DEVICE=$(jq -r '
+          PICK=$(jq -r '
             [.devices | to_entries[]
               | select(.key | test("iOS"))
               | {runtime: .key, devices: .value}
               | .devices[]
               | select(.isAvailable and (.name | test("^iPhone")))
-              | .name]
+              | "\(.udid)|\(.name)"]
             | first' /tmp/sims.json)
-          if [ -z "$DEVICE" ] || [ "$DEVICE" = "null" ]; then
+          if [ -z "$PICK" ] || [ "$PICK" = "null" ]; then
             echo "no iPhone simulator available; runtimes seen:"
             jq -r '.devices | keys[]' /tmp/sims.json
             exit 1
           fi
-          echo "device=$DEVICE" >> "$GITHUB_OUTPUT"
-          echo "Picked simulator: $DEVICE"
+          UDID="${PICK%%|*}"
+          NAME="${PICK#*|}"
+          echo "udid=$UDID" >> "$GITHUB_OUTPUT"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "Picked simulator: $NAME ($UDID)"
 
       - name: Build
         working-directory: ios
         run: |
+          set -o pipefail
           xcodebuild \
             -project Capsule.xcodeproj \
             -scheme Capsule \
-            -destination "platform=iOS Simulator,OS=latest,name=${{ steps.sim.outputs.device }}" \
+            -destination "platform=iOS Simulator,id=${{ steps.sim.outputs.udid }}" \
             -configuration Debug \
             CODE_SIGNING_ALLOWED=NO \
-            build
+            build 2>&1 | tee /tmp/xcodebuild-build.log
 
       - name: Test
         working-directory: ios
         run: |
+          set -o pipefail
           xcodebuild \
             -project Capsule.xcodeproj \
             -scheme Capsule \
-            -destination "platform=iOS Simulator,OS=latest,name=${{ steps.sim.outputs.device }}" \
+            -destination "platform=iOS Simulator,id=${{ steps.sim.outputs.udid }}" \
             -configuration Debug \
             CODE_SIGNING_ALLOWED=NO \
-            test
+            test 2>&1 | tee /tmp/xcodebuild-test.log
+
+      - name: Surface compile errors
+        if: failure()
+        run: |
+          echo "=== compile errors / warnings (build) ==="
+          grep -E "error:|warning:|note:" /tmp/xcodebuild-build.log 2>/dev/null \
+            | head -80 || true
+          echo "=== compile errors / warnings (test) ==="
+          grep -E "error:|warning:|note:" /tmp/xcodebuild-test.log 2>/dev/null \
+            | head -80 || true
+
+      - name: Upload xcodebuild logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-logs
+          path: /tmp/xcodebuild-*.log
+          if-no-files-found: ignore
