@@ -5,6 +5,12 @@ options:
     iOS: "17.0"
   developmentLanguage: en
   createIntermediateGroups: true
+  # Pin the .xcodeproj's objectVersion / compatibilityVersion to a format
+  # Xcode 15 can read. Recent xcodegen defaults to the Xcode 16 format
+  # (objectVersion 77), which fails the macos-14 runner's Xcode 15.4 with
+  # "future Xcode project file format (77)". Pinning here makes the
+  # project portable across both Xcode 15 and 16.
+  xcodeVersion: "15.0"
 configs:
   Debug: debug
   Release: release

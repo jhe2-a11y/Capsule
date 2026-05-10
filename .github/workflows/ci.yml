@@ -94,11 +94,13 @@ jobs:
 
       # Use whichever Xcode the runner has. Pinning to a specific path
       # (e.g. /Applications/Xcode_15.4.app) breaks when the runner image
-      # is updated. Xcode 15+ on macos-14 supports iOS 17 simulators.
+      # is updated or the version is dropped. Pick the highest Xcode_*
+      # bundle present and fall back to the runner default.
       - name: Discover Xcode
         run: |
           set -euo pipefail
-          DEVELOPER_DIR=$(ls -d /Applications/Xcode_15*.app 2>/dev/null | sort -r | head -1)/Contents/Developer
+          DEVELOPER_DIR=$(ls -d /Applications/Xcode_*.app 2>/dev/null \
+            | sort -V | tail -1)/Contents/Developer
           if [ -z "$DEVELOPER_DIR" ] || [ ! -d "$DEVELOPER_DIR" ]; then
             DEVELOPER_DIR=$(xcode-select -p)
           fi
