@@ -29,19 +29,16 @@ targets:
           - "Resources/Capsule.entitlements"
     resources:
       - Capsule/Resources/Config.plist
-    info:
-      path: Capsule/Resources/Info.plist
-    entitlements:
-      path: Capsule/Resources/Capsule.entitlements
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.capsule
-        CODE_SIGN_ENTITLEMENTS: Capsule/Resources/Capsule.entitlements
         TARGETED_DEVICE_FAMILY: "1"
         INFOPLIST_FILE: Capsule/Resources/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Capsule/Resources/Capsule.entitlements
         ENABLE_BITCODE: NO
         MTL_ENABLE_DEBUG_INFO: INCLUDE_SOURCE
         SWIFT_OBJC_BRIDGING_HEADER: ""
+        GENERATE_INFOPLIST_FILE: NO
     dependencies:
       - package: Supabase
         product: Supabase
