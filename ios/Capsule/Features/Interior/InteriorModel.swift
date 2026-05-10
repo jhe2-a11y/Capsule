@@ -12,7 +12,7 @@ final class InteriorModel: ObservableObject {
 
     let renderer: DepthFieldRenderer?
     private var motion = ParallaxMotion()
-    private var realtime: RealtimeMemoryChannel?
+    private var realtime: CapsuleRealtimeChannel?
     private var api: CapsuleAPI?
     private var auth: AuthService?
 
@@ -55,7 +55,7 @@ final class InteriorModel: ObservableObject {
             // present rather than blocking on data.
         }
 
-        let channel = RealtimeMemoryChannel(capsule: capsuleID) { [weak self] event in
+        let channel = CapsuleRealtimeChannel(capsule: capsuleID) { [weak self] event in
             Task { @MainActor [weak self] in self?.handleRealtime(event) }
         }
         await channel.start()
@@ -68,22 +68,25 @@ final class InteriorModel: ObservableObject {
         realtime = nil
     }
 
-    private func handleRealtime(_ event: RealtimeMemoryChannel.Event) {
+    private func handleRealtime(_ event: CapsuleRealtimeChannel.Event) {
         switch event {
-        case .insert(let m):
+        case .memoryInserted(let m):
             if !memories.contains(where: { $0.id == m.id }) {
                 memories.append(m)
                 renderer?.upsertNode(m)
                 Task { await loadTexture(for: m) }
             }
-        case .update(let m):
+        case .memoryUpdated(let m):
             if let idx = memories.firstIndex(where: { $0.id == m.id }) {
                 memories[idx] = m
                 renderer?.upsertNode(m)
             }
-        case .delete(let id):
+        case .memoryDeleted(let id):
             memories.removeAll { $0.id == id }
             renderer?.removeNode(id: id)
+        case .capsuleUpdated(let c):
+            self.capsule = c
+            self.canEdit = (c.ownerID == auth?.user?.id)
         }
     }
 

@@ -1,13 +1,16 @@
 import Foundation
 import Supabase
 
-/// Streams INSERT/UPDATE/DELETE on `memories` for a given capsule.
+/// Streams INSERT/UPDATE/DELETE on `memories` and UPDATEs on `capsules`
+/// for a given capsule. Renamed from `RealtimeMemoryChannel` once the
+/// surface widened to include capsule-level changes (title, access mode).
 @MainActor
-final class RealtimeMemoryChannel {
+final class CapsuleRealtimeChannel {
     enum Event {
-        case insert(Memory)
-        case update(Memory)
-        case delete(UUID)
+        case memoryInserted(Memory)
+        case memoryUpdated(Memory)
+        case memoryDeleted(UUID)
+        case capsuleUpdated(Capsule)
     }
 
     private let client = SupabaseClientFactory.shared
@@ -23,25 +26,33 @@ final class RealtimeMemoryChannel {
     func start() async {
         let channel = client.realtimeV2.channel("capsule:\(capsuleID.uuidString)")
 
-        let inserts = await channel.postgresChange(
+        let memoryInserts = await channel.postgresChange(
             InsertAction.self, schema: "public", table: "memories",
             filter: "capsule_id=eq.\(capsuleID.uuidString)")
-        let updates = await channel.postgresChange(
+        let memoryUpdates = await channel.postgresChange(
             UpdateAction.self, schema: "public", table: "memories",
             filter: "capsule_id=eq.\(capsuleID.uuidString)")
-        let deletes = await channel.postgresChange(
+        let memoryDeletes = await channel.postgresChange(
             DeleteAction.self, schema: "public", table: "memories",
             filter: "capsule_id=eq.\(capsuleID.uuidString)")
+        let capsuleUpdates = await channel.postgresChange(
+            UpdateAction.self, schema: "public", table: "capsules",
+            filter: "id=eq.\(capsuleID.uuidString)")
 
-        Task { for await change in inserts {
-            if let m = decode(change.record) { onEvent(.insert(m)) }
+        Task { for await change in memoryInserts {
+            if let m: Memory = decode(change.record) { onEvent(.memoryInserted(m)) }
         }}
-        Task { for await change in updates {
-            if let m = decode(change.record) { onEvent(.update(m)) }
+        Task { for await change in memoryUpdates {
+            if let m: Memory = decode(change.record) { onEvent(.memoryUpdated(m)) }
         }}
-        Task { for await change in deletes {
-            if let s = change.oldRecord["id"]?.stringValue,
-               let id = UUID(uuidString: s) { onEvent(.delete(id)) }
+        Task { for await change in memoryDeletes {
+            // The version-fragile bit: AnyJSON's case access. Inline so a
+            // breaking change in supabase-swift surfaces here, not in a helper.
+            if case .string(let s)? = change.oldRecord["id"],
+               let id = UUID(uuidString: s) { onEvent(.memoryDeleted(id)) }
+        }}
+        Task { for await change in capsuleUpdates {
+            if let c: Capsule = decode(change.record) { onEvent(.capsuleUpdated(c)) }
         }}
 
         await channel.subscribe()
@@ -55,9 +66,9 @@ final class RealtimeMemoryChannel {
         }
     }
 
-    private func decode(_ record: [String: AnyJSON]) -> Memory? {
+    private func decode<T: Decodable>(_ record: [String: AnyJSON]) -> T? {
         guard let data = try? JSONEncoder().encode(record) else { return nil }
-        return try? JSONDecoder.capsule.decode(Memory.self, from: data)
+        return try? JSONDecoder.capsule.decode(T.self, from: data)
     }
 }
 

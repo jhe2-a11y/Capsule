@@ -3,17 +3,17 @@ import Foundation
 
 /// Writes a Capsule Universal Link to a blank (or rewritable) NDEF tag.
 ///
-/// Two callers exist for this:
+/// Two callers exist:
 ///   1. The shop / factory provisioning utility — encode a chip with the
 ///      pre-seeded capsule UUID before it ships to the customer.
-///   2. The owner's "re-encode" affordance — replace a damaged or lost chip
-///      bound to an existing capsule.
+///   2. The owner's "re-encode" affordance — replace a damaged or lost
+///      chip bound to an existing capsule.
 ///
-/// Consumer reading is handled by `CapsuleNFCReader`. We deliberately keep
-/// these in separate types: the writer surface is rarely shown, and
-/// conflating them would leak the technology into the everyday read path.
-@MainActor
-final class CapsuleNFCWriter: NSObject {
+/// Concurrency model mirrors `CapsuleNFCReader`: not `@MainActor`, with
+/// mutable state behind a lock-guarded `Box` so the Core NFC callbacks
+/// (which arrive on Apple's queue) can mutate without violating
+/// `SWIFT_STRICT_CONCURRENCY: complete`.
+final class CapsuleNFCWriter: NSObject, @unchecked Sendable {
     static let shared = CapsuleNFCWriter()
 
     enum WriteError: Error {
@@ -23,10 +23,6 @@ final class CapsuleNFCWriter: NSObject {
         case writeFailed(String)
     }
 
-    private var session: NFCNDEFReaderSession?
-    private var continuation: CheckedContinuation<Void, Error>?
-    private var pendingURL: URL?
-
     /// Encode `url` onto the next NDEF tag the user holds to the phone.
     func write(url: URL,
                prompt: String = "Hold a blank Capsule chip near the top of your phone.") async throws {
@@ -34,108 +30,123 @@ final class CapsuleNFCWriter: NSObject {
             throw WriteError.unavailable
         }
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            self.continuation = cont
-            self.pendingURL = url
+            box.start(continuation: cont, url: url)
             // invalidateAfterFirstRead must be false so we get the
             // didDetect-tags callback (rather than only didDetectNDEFs).
             let s = NFCNDEFReaderSession(delegate: self, queue: .main, invalidateAfterFirstRead: false)
             s.alertMessage = prompt
             s.begin()
-            self.session = s
+            box.set(session: s)
+        }
+    }
+
+    // MARK: state box
+
+    private let box = Box()
+
+    fileprivate final class Box: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<Void, Error>?
+        private var session: NFCNDEFReaderSession?
+        private(set) var pendingURL: URL?
+
+        func start(continuation: CheckedContinuation<Void, Error>, url: URL) {
+            lock.withLock {
+                self.continuation = continuation
+                self.pendingURL = url
+            }
+        }
+        func set(session: NFCNDEFReaderSession?) {
+            lock.withLock { self.session = session }
+        }
+        func takeContinuation() -> CheckedContinuation<Void, Error>? {
+            lock.withLock {
+                let c = continuation
+                continuation = nil
+                pendingURL = nil
+                return c
+            }
+        }
+        func currentURL() -> URL? {
+            lock.withLock { pendingURL }
         }
     }
 }
 
 extension CapsuleNFCWriter: NFCNDEFReaderSessionDelegate {
-    nonisolated func readerSessionDidBecomeActive(_ session: NFCNDEFReaderSession) { }
+    func readerSessionDidBecomeActive(_ session: NFCNDEFReaderSession) { }
 
-    nonisolated func readerSession(_ session: NFCNDEFReaderSession, didDetectNDEFs messages: [NFCNDEFMessage]) {
-        // We rely on `didDetect tags:` for writing; this is unused when
-        // invalidateAfterFirstRead == false but the protocol still requires it.
+    func readerSession(_ session: NFCNDEFReaderSession, didDetectNDEFs messages: [NFCNDEFMessage]) {
+        // Unused when invalidateAfterFirstRead == false; we drive writing
+        // from `didDetect tags:` instead.
     }
 
-    nonisolated func readerSession(_ session: NFCNDEFReaderSession, didDetect tags: [NFCNDEFTag]) {
+    func readerSession(_ session: NFCNDEFReaderSession, didDetect tags: [NFCNDEFTag]) {
         guard let tag = tags.first else {
             session.invalidate(errorMessage: "No chip found.")
-            Task { @MainActor in self.finish(throwing: WriteError.noTag) }
+            box.takeContinuation()?.resume(throwing: WriteError.noTag)
             return
         }
-
         if tags.count > 1 {
-            session.alertMessage = "More than one chip — try one at a time."
-            session.invalidate(errorMessage: "Multiple chips detected.")
-            Task { @MainActor in self.finish(throwing: WriteError.writeFailed("multiple tags")) }
+            session.invalidate(errorMessage: "More than one chip — try one at a time.")
+            box.takeContinuation()?.resume(throwing: WriteError.writeFailed("multiple tags"))
+            return
+        }
+        guard let url = box.currentURL() else {
+            session.invalidate(errorMessage: "Nothing to write.")
+            box.takeContinuation()?.resume(throwing: WriteError.writeFailed("no payload"))
             return
         }
 
-        Task { @MainActor in
-            guard let url = self.pendingURL else {
-                session.invalidate(errorMessage: "Nothing to write.")
-                self.finish(throwing: WriteError.writeFailed("no payload"))
+        // Bind only Sendable / value-type captures into the Core NFC
+        // closures. `box` is reference-but-Sendable; `url`, `session`,
+        // and `tag` are values from this scope.
+        let box = self.box
+        session.connect(to: tag) { connectErr in
+            if let connectErr {
+                session.invalidate(errorMessage: "Couldn’t connect.")
+                box.takeContinuation()?.resume(throwing: connectErr)
                 return
             }
-
-            session.connect(to: tag) { [weak self] err in
-                guard let self else { return }
-                if let err {
-                    session.invalidate(errorMessage: "Couldn’t connect.")
-                    Task { @MainActor in self.finish(throwing: err) }
+            tag.queryNDEFStatus { status, _, statusErr in
+                if let statusErr {
+                    session.invalidate(errorMessage: "Couldn’t read this chip.")
+                    box.takeContinuation()?.resume(throwing: statusErr)
                     return
                 }
-                tag.queryNDEFStatus { status, _, statusErr in
-                    if let statusErr {
-                        session.invalidate(errorMessage: "Couldn’t read this chip.")
-                        Task { @MainActor in self.finish(throwing: statusErr) }
+                switch status {
+                case .notSupported, .readOnly:
+                    session.invalidate(errorMessage: "This chip can’t be written.")
+                    box.takeContinuation()?.resume(throwing: WriteError.readOnly)
+                case .readWrite:
+                    guard let payload = NFCNDEFPayload.wellKnownTypeURIPayload(url: url) else {
+                        session.invalidate(errorMessage: "Bad URL.")
+                        box.takeContinuation()?.resume(throwing: WriteError.writeFailed("invalid url"))
                         return
                     }
-                    switch status {
-                    case .notSupported, .readOnly:
-                        session.invalidate(errorMessage: "This chip can’t be written.")
-                        Task { @MainActor in self.finish(throwing: WriteError.readOnly) }
-                    case .readWrite:
-                        let payload = NFCNDEFPayload.wellKnownTypeURIPayload(url: url)
-                        guard let payload else {
-                            session.invalidate(errorMessage: "Bad URL.")
-                            Task { @MainActor in self.finish(throwing: WriteError.writeFailed("invalid url")) }
+                    let message = NFCNDEFMessage(records: [payload])
+                    tag.writeNDEF(message) { writeErr in
+                        if let writeErr {
+                            session.invalidate(errorMessage: "Couldn’t write.")
+                            box.takeContinuation()?.resume(throwing: writeErr)
                             return
                         }
-                        let message = NFCNDEFMessage(records: [payload])
-                        tag.writeNDEF(message) { writeErr in
-                            if let writeErr {
-                                session.invalidate(errorMessage: "Couldn’t write.")
-                                Task { @MainActor in self.finish(throwing: writeErr) }
-                                return
-                            }
-                            session.alertMessage = "Capsule encoded."
-                            session.invalidate()
-                            Task { @MainActor in self.finish(throwing: nil) }
-                        }
-                    @unknown default:
-                        session.invalidate(errorMessage: "Unknown chip state.")
-                        Task { @MainActor in self.finish(throwing: WriteError.writeFailed("unknown status")) }
+                        session.alertMessage = "Capsule encoded."
+                        session.invalidate()
+                        box.takeContinuation()?.resume(returning: ())
                     }
+                @unknown default:
+                    session.invalidate(errorMessage: "Unknown chip state.")
+                    box.takeContinuation()?.resume(throwing: WriteError.writeFailed("unknown status"))
                 }
             }
         }
     }
 
-    nonisolated func readerSession(_ session: NFCNDEFReaderSession, didInvalidateWithError error: Error) {
-        Task { @MainActor in
-            // Only surface as failure if we haven't already resolved (the
-            // happy path invalidates after a successful write and is finished
-            // before this delegate call).
-            if self.continuation != nil {
-                self.finish(throwing: error)
-            }
-        }
-    }
-
-    private func finish(throwing error: Error?) {
-        let cont = continuation
-        continuation = nil
-        pendingURL = nil
-        session = nil
-        if let error { cont?.resume(throwing: error) }
-        else         { cont?.resume(returning: ()) }
+    func readerSession(_ session: NFCNDEFReaderSession, didInvalidateWithError error: Error) {
+        // Only surface as failure if we haven't already resolved (the
+        // happy path invalidates after a successful write and is finished
+        // before this delegate call).
+        box.takeContinuation()?.resume(throwing: error)
     }
 }

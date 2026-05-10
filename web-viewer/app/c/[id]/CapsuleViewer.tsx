@@ -16,7 +16,8 @@ interface Props {
   memories: MemoryRow[];
 }
 
-export function CapsuleViewer({ capsule, memories: initial }: Props) {
+export function CapsuleViewer({ capsule: initialCapsule, memories: initial }: Props) {
+  const [capsule, setCapsule] = useState<CapsuleRow>(initialCapsule);
   const [memories, setMemories] = useState<MemoryRow[]>(initial);
   const [focused, setFocused] = useState<string | null>(null);
   const [appPrompt, setAppPrompt] = useState<boolean>(true);
@@ -77,6 +78,20 @@ export function CapsuleViewer({ capsule, memories: initial }: Props) {
           if (!oldRow.id) return;
           setMemories((prev) => prev.filter((m) => m.id !== oldRow.id));
           setFocused((cur) => (cur === oldRow.id ? null : cur));
+        },
+      )
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "capsules",
+          filter: `id=eq.${capsule.id}` },
+        (payload) => {
+          const row = payload.new as CapsuleRow;
+          setCapsule(row);
+          // If the owner just flipped the capsule to private and the
+          // current viewer is anonymous, RLS will start denying memory
+          // reads on subsequent fetches. We don't tear down the existing
+          // memories — they were already returned to this session — but
+          // future deltas will simply stop arriving.
         },
       )
       .subscribe();

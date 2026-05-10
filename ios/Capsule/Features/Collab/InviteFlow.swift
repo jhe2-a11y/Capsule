@@ -8,6 +8,8 @@ struct CapsuleSettingsView: View {
     @State private var inviteURL: URL?
     @State private var working = false
     @State private var encodeStatus: EncodeStatus = .idle
+    @State private var requests: [AccessRequest] = []
+    @State private var resolvingRequest: UUID?
     @Environment(\.dismiss) private var dismiss
 
     enum EncodeStatus: Equatable {
@@ -50,10 +52,14 @@ struct CapsuleSettingsView: View {
                             .padding(.horizontal)
                     }
 
+                    if !requests.isEmpty {
+                        accessRequestsPanel
+                    }
+
                     Spacer()
 
                     // Re-encode chip — shown only after a deliberate long-press
-                    // on the title so it stays out of the everyday surface.
+                    // on the soft mark so it stays out of the everyday surface.
                     encodePanel
                 } else {
                     ProgressView().tint(.white)
@@ -73,6 +79,86 @@ struct CapsuleSettingsView: View {
         }
         .task {
             capsule = try? await session.api.fetchCapsule(id: capsuleID)
+            await loadRequests()
+        }
+    }
+
+    private func loadRequests() async {
+        guard capsule?.ownerID == session.auth.user?.id else { return }
+        if let rs = try? await session.api.accessRequests(capsule: capsuleID) {
+            self.requests = rs
+        }
+    }
+
+    @ViewBuilder
+    private var accessRequestsPanel: some View {
+        VStack(spacing: 10) {
+            Text("Pending requests")
+                .font(.system(.footnote, design: .serif))
+                .foregroundStyle(.white.opacity(0.55))
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            ForEach(requests) { req in
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(shortened(req.requesterID))
+                            .font(.system(.body, design: .serif))
+                            .foregroundStyle(.white.opacity(0.85))
+                        if let m = req.message, !m.isEmpty {
+                            Text(m)
+                                .font(.system(.footnote, design: .serif).italic())
+                                .foregroundStyle(.white.opacity(0.55))
+                                .lineLimit(2)
+                        }
+                    }
+                    Spacer()
+                    Button("Pass") { decline(req) }
+                        .font(.system(.footnote, design: .serif))
+                        .foregroundStyle(.white.opacity(0.5))
+                        .disabled(resolvingRequest == req.id)
+                    Button("Allow") { accept(req) }
+                        .font(.system(.footnote, design: .serif))
+                        .foregroundStyle(.white.opacity(0.95))
+                        .padding(.horizontal, 12).padding(.vertical, 6)
+                        .background(.white.opacity(0.08), in: SwiftUI.Capsule())
+                        .disabled(resolvingRequest == req.id)
+                }
+                .padding(.vertical, 6)
+            }
+        }
+        .padding(.top, 8)
+    }
+
+    private func shortened(_ id: UUID) -> String {
+        // Show the first 6 hex chars; the requester's display name isn't
+        // available in MVP, so the short id reads as a calm placeholder.
+        String(id.uuidString.prefix(6)).lowercased()
+    }
+
+    private func accept(_ req: AccessRequest) {
+        resolvingRequest = req.id
+        Task {
+            defer { resolvingRequest = nil }
+            do {
+                try await session.api.acceptAccessRequest(id: req.id)
+                requests.removeAll { $0.id == req.id }
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+            } catch {
+                UINotificationFeedbackGenerator().notificationOccurred(.warning)
+            }
+        }
+    }
+
+    private func decline(_ req: AccessRequest) {
+        resolvingRequest = req.id
+        Task {
+            defer { resolvingRequest = nil }
+            do {
+                try await session.api.declineAccessRequest(id: req.id)
+                requests.removeAll { $0.id == req.id }
+            } catch {
+                // Leave the row visible; owner can retry.
+            }
         }
     }
 

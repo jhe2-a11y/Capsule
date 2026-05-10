@@ -31,15 +31,20 @@ final class CapsuleAPI {
     }
 
     func setAccessMode(capsule id: UUID, mode: AccessMode) async throws {
+        struct Patch: Encodable { let access_mode: String }
         try await client.from("capsules")
-            .update(["access_mode": mode.rawValue])
+            .update(Patch(access_mode: mode.rawValue))
             .eq("id", value: id.uuidString)
             .execute()
     }
 
     func setTitle(capsule id: UUID, title: String?) async throws {
+        // Explicit struct so `nil` encodes as JSON null and clears the
+        // column. A `[String: String?]` literal would omit the key and
+        // leave the existing value in place.
+        struct Patch: Encodable { let title: String? }
         try await client.from("capsules")
-            .update(["title": title as String?])
+            .update(Patch(title: title))
             .eq("id", value: id.uuidString)
             .execute()
     }
@@ -66,10 +71,15 @@ final class CapsuleAPI {
             .value
     }
 
+    /// Insert via a DTO that omits `created_at`, so the server's
+    /// `default now()` fills it. Avoids the client's clock leaking into
+    /// memory ordering and works regardless of the PostgREST encoder's
+    /// Date strategy.
     func insertMemory(_ memory: Memory) async throws -> Memory {
+        let payload = MemoryInsert(memory: memory)
         let inserted: Memory = try await client
             .from("memories")
-            .insert(memory)
+            .insert(payload)
             .select()
             .single()
             .execute()
@@ -142,6 +152,38 @@ final class CapsuleAPI {
         )
     }
 
+    // MARK: access requests (owner-side)
+
+    func accessRequests(capsule id: UUID) async throws -> [AccessRequest] {
+        try await client
+            .from("access_requests")
+            .select()
+            .eq("capsule_id", value: id.uuidString)
+            .eq("status", value: "pending")
+            .order("created_at", ascending: false)
+            .execute()
+            .value
+    }
+
+    /// Atomic accept via a SECURITY DEFINER edge function: flips the
+    /// request status to `accepted` and inserts the requester into
+    /// `capsule_collaborators` in one transaction.
+    func acceptAccessRequest(id: UUID) async throws {
+        struct Body: Encodable { let request_id: String }
+        let _: [String: Bool] = try await client.functions.invoke(
+            "accept-access-request",
+            options: .init(body: Body(request_id: id.uuidString))
+        )
+    }
+
+    func declineAccessRequest(id: UUID) async throws {
+        struct Patch: Encodable { let status: String }
+        try await client.from("access_requests")
+            .update(Patch(status: "declined"))
+            .eq("id", value: id.uuidString)
+            .execute()
+    }
+
     // MARK: storage upload
 
     func uploadMedia(
@@ -167,5 +209,33 @@ final class CapsuleAPI {
                 options: .init(contentType: contentType, upsert: false)
             )
         return path
+    }
+}
+
+/// Encodable shape sent to PostgREST when inserting a memory. Mirrors
+/// `Memory` but omits `created_at` so the server's default now() fills it.
+private struct MemoryInsert: Encodable {
+    let id: UUID
+    let capsule_id: UUID
+    let kind: String
+    let storage_path: String?
+    let text_content: String?
+    let duration_ms: Int?
+    let pos_x: Float
+    let pos_y: Float
+    let pos_z: Float
+    let created_by: UUID?
+
+    init(memory m: Memory) {
+        self.id = m.id
+        self.capsule_id = m.capsuleID
+        self.kind = m.kind.rawValue
+        self.storage_path = m.storagePath
+        self.text_content = m.textContent
+        self.duration_ms = m.durationMs
+        self.pos_x = m.posX
+        self.pos_y = m.posY
+        self.pos_z = m.posZ
+        self.created_by = m.createdBy
     }
 }
