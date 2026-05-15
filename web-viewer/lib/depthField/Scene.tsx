@@ -4,14 +4,14 @@ import { Canvas, useFrame, useLoader, useThree } from "@react-three/fiber";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { TextureLoader } from "three";
-import type { MemoryRow } from "./types";
+import type { LocalMemory, MemoryRow } from "./types";
 
 // Web parity for the iOS depth field. Memories live in normalized capsule
 // space (x,y in [-1,1], z in [0,1]). Camera sits at z = 1.2; pull-forward is
 // implemented as a smooth dolly along z.
 
 interface SceneProps {
-  memories: MemoryRow[];
+  memories: LocalMemory[];
   resolveURL: (memoryId: string) => Promise<string | null>;
   focused: string | null;
   onFocusChange: (id: string | null) => void;
@@ -39,7 +39,7 @@ export function DepthFieldScene({ memories, resolveURL, focused, onFocusChange }
 function Field({
   memories, focused, setFocused, resolveURL,
 }: {
-  memories: MemoryRow[];
+  memories: LocalMemory[];
   focused: string | null;
   setFocused: (id: string | null) => void;
   resolveURL: SceneProps["resolveURL"];
@@ -74,7 +74,7 @@ function Field({
 function MemoryQuad({
   memory, focused, dim, onClick, resolveURL,
 }: {
-  memory: MemoryRow;
+  memory: LocalMemory;
   focused: boolean;
   dim: boolean;
   onClick: () => void;
@@ -82,22 +82,31 @@ function MemoryQuad({
 }) {
   const ref = useRef<THREE.Mesh>(null);
   const [url, setUrl] = useState<string | null>(null);
+  const tRef = useRef(0);
 
   useEffect(() => {
     let live = true;
-    if (memory.kind !== "text") {
+    // In-flight memories don't have a persisted storage_path yet, so skip
+    // the signed-URL fetch — they'll either swap to the real row on
+    // realtime INSERT or fail back out.
+    if (memory.kind !== "text" && !memory.inFlight) {
       resolveURL(memory.id).then((u) => { if (live) setUrl(u); });
     }
     return () => { live = false; };
-  }, [memory.id, memory.kind, resolveURL]);
+  }, [memory.id, memory.kind, memory.inFlight, resolveURL]);
 
   useFrame((_, delta) => {
     if (!ref.current) return;
+    tRef.current += delta;
     const target = focused ? 1.18 : (dim ? 0.82 : 1);
     ref.current.scale.x += (target - ref.current.scale.x) * Math.min(1, delta * 5);
     ref.current.scale.y = ref.current.scale.x;
+
+    const baseOp = memory.uploadError ? 0.55
+                : memory.inFlight    ? 0.45 + 0.15 * Math.sin(tRef.current * 2.2)
+                : 1.0;
+    const targetOp = dim ? baseOp * 0.5 : baseOp;
     const op = (ref.current.material as THREE.MeshBasicMaterial).opacity;
-    const targetOp = dim ? 0.45 : 1.0;
     (ref.current.material as THREE.MeshBasicMaterial).opacity =
       op + (targetOp - op) * Math.min(1, delta * 5);
   });
@@ -121,7 +130,7 @@ function MemoryQuad({
   );
 }
 
-function QuadTexture({ memory, url }: { memory: MemoryRow; url: string | null }) {
+function QuadTexture({ memory, url }: { memory: LocalMemory; url: string | null }) {
   if (memory.kind === "text") {
     return <TextMap text={memory.text_content ?? ""} />;
   }
@@ -190,7 +199,7 @@ function wrap(ctx: CanvasRenderingContext2D, text: string, x: number, y: number,
   if (line) ctx.fillText(line, x, y);
 }
 
-function memberZ(list: MemoryRow[], id: string): number {
+function memberZ(list: LocalMemory[], id: string): number {
   return list.find((m) => m.id === id)?.pos_z ?? 0.5;
 }
 

@@ -22,3 +22,14 @@ export interface MemoryRow {
   created_at: string;
   created_by: string | null;
 }
+
+// Local-only superset of MemoryRow used while an upload is in flight or has
+// failed. Never written to the DB; not part of any realtime payload. Anything
+// that depends on `inFlight` or `uploadError` must treat them as optional.
+export interface LocalMemory extends MemoryRow {
+  inFlight?: boolean;
+  uploadError?: string;
+  // Used by realtime reconciliation: when the server-side INSERT arrives, we
+  // swap the optimistic row out by matching this id.
+  localId?: string;
+}

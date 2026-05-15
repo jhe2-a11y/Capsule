@@ -2,10 +2,16 @@
 
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { CapsuleRow, MemoryRow } from "@/lib/depthField/types";
+import type { CapsuleRow, LocalMemory, MemoryKind, MemoryRow } from "@/lib/depthField/types";
 import { Foreground } from "@/lib/depthField/Foreground";
 import { browserClient } from "@/lib/supabase/client";
 import { relativeTime } from "@/lib/format/relativeTime";
+import { useCapsuleRole, canWrite as roleCanWrite } from "@/lib/upload/useCapsuleRole";
+import { useDropzone, type DropPayload } from "@/lib/upload/useDropzone";
+import { pickFreeSpot } from "@/lib/upload/freeSpot";
+import { inferKindFromMime, uploadMemory } from "@/lib/upload/uploader";
+import { DropPill } from "@/components/DropPill";
+import { DropOverlay } from "@/components/DropOverlay";
 
 const DepthFieldScene = dynamic(
   () => import("@/lib/depthField/Scene").then((m) => m.DepthFieldScene),
@@ -19,14 +25,30 @@ interface Props {
 
 export function CapsuleViewer({ capsule: initialCapsule, memories: initial }: Props) {
   const [capsule, setCapsule] = useState<CapsuleRow>(initialCapsule);
-  const [memories, setMemories] = useState<MemoryRow[]>(initial);
+  const [memories, setMemories] = useState<LocalMemory[]>(initial);
   const [focused, setFocused] = useState<string | null>(null);
   const [appPrompt, setAppPrompt] = useState<boolean>(true);
+
+  const roleState = useCapsuleRole(capsule.id, capsule.owner_id);
+  const canWrite = roleCanWrite(roleState.role);
 
   const focusedMemory = useMemo(
     () => memories.find((m) => m.id === focused) ?? null,
     [memories, focused],
   );
+
+  // Tiles in-flight or in an error state aren't openable. Clicking an errored
+  // tile dismisses it from local state (the user can re-pick the file).
+  const handleFocusChange = useCallback((id: string | null) => {
+    if (id === null) { setFocused(null); return; }
+    const m = memories.find((x) => x.id === id);
+    if (m?.inFlight) return;
+    if (m?.uploadError) {
+      setMemories((prev) => prev.filter((x) => x.id !== id));
+      return;
+    }
+    setFocused(id);
+  }, [memories]);
 
   const resolveURL = useCallback(async (memoryID: string): Promise<string | null> => {
     try {
@@ -57,8 +79,17 @@ export function CapsuleViewer({ capsule: initialCapsule, memories: initial }: Pr
           filter: `capsule_id=eq.${capsule.id}` },
         (payload) => {
           const row = payload.new as MemoryRow;
-          setMemories((prev) =>
-            prev.some((m) => m.id === row.id) ? prev : [...prev, row]);
+          // Reconcile-by-id: if we already have a local optimistic row with
+          // this id (our own upload), replace it; otherwise append.
+          setMemories((prev) => {
+            const existing = prev.findIndex((m) => m.id === row.id);
+            if (existing >= 0) {
+              const next = prev.slice();
+              next[existing] = row;
+              return next;
+            }
+            return [...prev, row];
+          });
         },
       )
       .on(
@@ -131,13 +162,90 @@ export function CapsuleViewer({ capsule: initialCapsule, memories: initial }: Pr
     return () => window.removeEventListener("keydown", onKey);
   }, [memories, focused]);
 
+  // Optimistic insert + upload + reconcile.
+  const startUpload = useCallback((payload: DropPayload) => {
+    if (!roleState.userId) return;
+    if (!canWrite) return;
+
+    const kind: MemoryKind | null = payload.kind === "text"
+      ? "text"
+      : inferKindFromMime(payload.file.type);
+    if (!kind) return;
+
+    const userId = roleState.userId;
+    const spot = pickFreeSpot(memories);
+    const memoryId = crypto.randomUUID();
+    const optimistic: LocalMemory = {
+      id: memoryId,
+      capsule_id: capsule.id,
+      kind,
+      storage_path: null,
+      text_content: payload.kind === "text" ? payload.text : null,
+      duration_ms: null,
+      pos_x: spot.x, pos_y: spot.y, pos_z: spot.z,
+      created_at: new Date().toISOString(),
+      created_by: userId,
+      inFlight: true,
+    };
+    setMemories((prev) => [...prev, optimistic]);
+
+    void (async () => {
+      try {
+        const real = await uploadMemory({
+          capsuleId: capsule.id,
+          memoryId,
+          userId,
+          position: spot,
+          kind,
+          file: payload.kind === "file" ? payload.file : undefined,
+          text: payload.kind === "text" ? payload.text : undefined,
+        });
+        setMemories((prev) => prev.map((m) => (m.id === memoryId ? real : m)));
+      } catch (err) {
+        setMemories((prev) => prev.map((m) =>
+          m.id === memoryId
+            ? { ...m, inFlight: false, uploadError: errorMessage(err) }
+            : m
+        ));
+      }
+    })();
+  }, [capsule.id, canWrite, memories, roleState.userId]);
+
+  const { isDraggingOver } = useDropzone({
+    enabled: !roleState.loading,
+    onAccept: startUpload,
+  });
+
+  const handleFilesPicked = useCallback((files: File[]) => {
+    if (!canWrite) return;
+    for (const file of files) {
+      startUpload({ kind: "file", file });
+    }
+  }, [canWrite, startUpload]);
+
+  const handleRequestAccess = useCallback(async (): Promise<boolean> => {
+    if (!roleState.userId) {
+      window.location.href = `/auth/sign-in?next=/c/${capsule.id}`;
+      return false;
+    }
+    try {
+      const supabase = browserClient();
+      const { error } = await supabase.functions.invoke("request-access", {
+        body: { capsule_id: capsule.id },
+      });
+      return !error;
+    } catch {
+      return false;
+    }
+  }, [capsule.id, roleState.userId]);
+
   return (
     <main style={{ height: "100vh", position: "relative" }}>
       <DepthFieldScene
         memories={memories}
         resolveURL={resolveURL}
         focused={focused}
-        onFocusChange={setFocused}
+        onFocusChange={handleFocusChange}
       />
 
       {/* Screen-reader & keyboard-friendly parallel list of memories. Visually
@@ -164,7 +272,17 @@ export function CapsuleViewer({ capsule: initialCapsule, memories: initial }: Pr
         />
       )}
 
-      {appPrompt && !focusedMemory && (
+      {!focusedMemory && canWrite && (
+        <DropPill onFilesPicked={handleFilesPicked} />
+      )}
+
+      <DropOverlay
+        visible={isDraggingOver}
+        canWrite={canWrite}
+        onRequestAccess={canWrite ? undefined : handleRequestAccess}
+      />
+
+      {appPrompt && !focusedMemory && !isDraggingOver && (
         <div
           style={{
             position: "absolute", bottom: 28, left: 0, right: 0,
@@ -196,7 +314,7 @@ const srOnly: React.CSSProperties = {
   clip: "rect(0,0,0,0)", whiteSpace: "nowrap", border: 0,
 };
 
-function labelFor(kind: MemoryRow["kind"]): string {
+function labelFor(kind: MemoryKind): string {
   switch (kind) {
     case "text":  return "Note";
     case "photo": return "Photo";
@@ -217,7 +335,7 @@ function arrowDirection(key: string): Dir | null {
   }
 }
 
-function centermostId(memories: MemoryRow[]): string | null {
+function centermostId(memories: LocalMemory[]): string | null {
   if (memories.length === 0) return null;
   let bestId = memories[0].id;
   let bestDist = Infinity;
@@ -228,7 +346,7 @@ function centermostId(memories: MemoryRow[]): string | null {
   return bestId;
 }
 
-function neighborInDirection(memories: MemoryRow[], fromId: string, dir: Dir): string | null {
+function neighborInDirection(memories: LocalMemory[], fromId: string, dir: Dir): string | null {
   const cur = memories.find((m) => m.id === fromId);
   if (!cur) return null;
   let bestId: string | null = null;
@@ -249,6 +367,12 @@ function neighborInDirection(memories: MemoryRow[], fromId: string, dir: Dir): s
     if (score < bestScore) { bestScore = score; bestId = m.id; }
   }
   return bestId;
+}
+
+function errorMessage(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (typeof e === "string") return e;
+  return "Upload failed.";
 }
 
 function Materializing() {
