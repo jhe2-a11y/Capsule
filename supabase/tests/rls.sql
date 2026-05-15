@@ -96,3 +96,71 @@ begin
     raise notice 'second_claim_correctly_failed sqlstate=%', SQLSTATE;
   end;
 end $$;
+
+-- 6. decline_access_request: only the owner may decline. A stranger gets
+--    error 42501; the owner succeeds and the status flips.
+do $$
+declare alice uuid := '0000aaaa-0000-0000-0000-000000000001';
+        bob   uuid := '0000bbbb-0000-0000-0000-000000000002';
+        c_priv uuid := 'cccc0000-0000-0000-0000-00000000000b';
+        req_id uuid;
+        decline_ok boolean := false;
+        stranger_blocked boolean := false;
+begin
+  perform public._as(bob);
+  insert into public.access_requests (capsule_id, requester_id, message)
+       values (c_priv, bob, 'pls')
+  returning id into req_id;
+
+  -- Bob (not owner) tries to decline his own request -> 42501.
+  begin
+    perform public.decline_access_request(req_id);
+  exception when others then
+    if SQLSTATE = '42501' then stranger_blocked := true; end if;
+  end;
+
+  -- Alice (owner) declines -> succeeds.
+  perform public._as(alice);
+  perform public.decline_access_request(req_id);
+  select status = 'declined' into decline_ok from public.access_requests
+   where id = req_id;
+
+  raise notice 'decline_stranger_blocked = %', stranger_blocked;
+  raise notice 'decline_owner_succeeds   = %', decline_ok;
+end $$;
+
+-- 7. revoke_invite: only the owner may revoke. Idempotent on
+--    already-redeemed / already-expired invites.
+do $$
+declare alice uuid := '0000aaaa-0000-0000-0000-000000000001';
+        bob   uuid := '0000bbbb-0000-0000-0000-000000000002';
+        c_priv uuid := 'cccc0000-0000-0000-0000-00000000000b';
+        tok text := 'TESTINVITE0000000000000001';
+        ok boolean := false;
+        stranger_blocked boolean := false;
+begin
+  perform public._as(alice);
+  insert into public.capsule_invites (token, capsule_id, created_by, role, expires_at)
+       values (tok, c_priv, alice, 'editor', now() + interval '1 day')
+  on conflict (token) do update set expires_at = now() + interval '1 day';
+
+  -- Bob can't revoke Alice's invite.
+  perform public._as(bob);
+  begin
+    perform public.revoke_invite(tok);
+  exception when others then
+    if SQLSTATE = '42501' then stranger_blocked := true; end if;
+  end;
+
+  -- Alice revokes -> expires_at flips to past.
+  perform public._as(alice);
+  perform public.revoke_invite(tok);
+  select expires_at <= now() into ok from public.capsule_invites where token = tok;
+
+  raise notice 'revoke_stranger_blocked = %', stranger_blocked;
+  raise notice 'revoke_owner_succeeds   = %', ok;
+
+  -- Second revoke is a no-op (idempotent), not an error.
+  perform public.revoke_invite(tok);
+  raise notice 'revoke_idempotent       = t';
+end $$;
