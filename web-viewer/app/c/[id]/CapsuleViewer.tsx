@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { CapsuleRow, MemoryRow } from "@/lib/depthField/types";
 import { Foreground } from "@/lib/depthField/Foreground";
 import { browserClient } from "@/lib/supabase/client";
+import { relativeTime } from "@/lib/format/relativeTime";
 
 const DepthFieldScene = dynamic(
   () => import("@/lib/depthField/Scene").then((m) => m.DepthFieldScene),
@@ -101,14 +102,34 @@ export function CapsuleViewer({ capsule: initialCapsule, memories: initial }: Pr
     };
   }, [capsule.id]);
 
-  // Esc closes the foreground overlay (parity with the iOS swipe-down).
+  // Keyboard navigation: Esc closes; arrows traverse the field; Enter opens
+  // the nearest memory when nothing is focused.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setFocused(null);
+      if (e.key === "Escape") {
+        setFocused(null);
+        return;
+      }
+      if (memories.length === 0) return;
+
+      const dir = arrowDirection(e.key);
+      if (dir) {
+        e.preventDefault();
+        setFocused((cur) => {
+          if (cur === null) return centermostId(memories);
+          const next = neighborInDirection(memories, cur, dir);
+          return next ?? cur;
+        });
+        return;
+      }
+      if (e.key === "Enter" && focused === null) {
+        e.preventDefault();
+        setFocused(centermostId(memories));
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [memories, focused]);
 
   return (
     <main style={{ height: "100vh", position: "relative" }}>
@@ -118,6 +139,22 @@ export function CapsuleViewer({ capsule: initialCapsule, memories: initial }: Pr
         focused={focused}
         onFocusChange={setFocused}
       />
+
+      {/* Screen-reader & keyboard-friendly parallel list of memories. Visually
+          hidden but reachable via Tab. Each item activates the same focus
+          state as a click in the 3D scene. */}
+      <ul style={srOnly} aria-label="Capsule memories">
+        {memories.map((m) => (
+          <li key={m.id}>
+            <button
+              onClick={() => setFocused(m.id)}
+              aria-label={`Open ${labelFor(m.kind)} memory added ${relativeTime(m.created_at)}`}
+            >
+              {labelFor(m.kind)} — {relativeTime(m.created_at)}
+            </button>
+          </li>
+        ))}
+      </ul>
 
       {focusedMemory && (
         <Foreground
@@ -153,17 +190,88 @@ export function CapsuleViewer({ capsule: initialCapsule, memories: initial }: Pr
   );
 }
 
+const srOnly: React.CSSProperties = {
+  position: "absolute", width: 1, height: 1,
+  padding: 0, margin: -1, overflow: "hidden",
+  clip: "rect(0,0,0,0)", whiteSpace: "nowrap", border: 0,
+};
+
+function labelFor(kind: MemoryRow["kind"]): string {
+  switch (kind) {
+    case "text":  return "Note";
+    case "photo": return "Photo";
+    case "video": return "Video";
+    case "voice": return "Voice";
+  }
+}
+
+type Dir = "left" | "right" | "up" | "down";
+
+function arrowDirection(key: string): Dir | null {
+  switch (key) {
+    case "ArrowLeft":  return "left";
+    case "ArrowRight": return "right";
+    case "ArrowUp":    return "up";
+    case "ArrowDown":  return "down";
+    default: return null;
+  }
+}
+
+function centermostId(memories: MemoryRow[]): string | null {
+  if (memories.length === 0) return null;
+  let bestId = memories[0].id;
+  let bestDist = Infinity;
+  for (const m of memories) {
+    const d = m.pos_x * m.pos_x + m.pos_y * m.pos_y;
+    if (d < bestDist) { bestDist = d; bestId = m.id; }
+  }
+  return bestId;
+}
+
+function neighborInDirection(memories: MemoryRow[], fromId: string, dir: Dir): string | null {
+  const cur = memories.find((m) => m.id === fromId);
+  if (!cur) return null;
+  let bestId: string | null = null;
+  let bestScore = Infinity;
+  for (const m of memories) {
+    if (m.id === fromId) continue;
+    const dx = m.pos_x - cur.pos_x;
+    const dy = m.pos_y - cur.pos_y;
+    let along = 0, across = 0;
+    switch (dir) {
+      case "left":  along = -dx; across = Math.abs(dy); break;
+      case "right": along =  dx; across = Math.abs(dy); break;
+      case "up":    along =  dy; across = Math.abs(dx); break;
+      case "down":  along = -dy; across = Math.abs(dx); break;
+    }
+    if (along <= 0.001) continue; // candidate is not in the chosen direction
+    const score = along + across * 2;
+    if (score < bestScore) { bestScore = score; bestId = m.id; }
+  }
+  return bestId;
+}
+
 function Materializing() {
   return (
-    <div style={{
-      height: "100vh", display: "flex",
-      alignItems: "center", justifyContent: "center",
-    }}>
+    <div
+      aria-label="Loading Capsule"
+      style={{
+        height: "100vh", display: "flex",
+        alignItems: "center", justifyContent: "center",
+      }}
+    >
       <div style={{
         width: 220, height: 220, borderRadius: "50%",
         background: "radial-gradient(circle, rgba(255,255,255,0.08), transparent 60%)",
         filter: "blur(28px)",
+        animation: "capsule-pulse 2.4s ease-in-out infinite",
       }} />
+      <style>{`
+        @keyframes capsule-pulse {
+          0%, 100% { opacity: 0.55; transform: scale(1); }
+          50%      { opacity: 1;    transform: scale(1.04); }
+        }
+      `}</style>
     </div>
   );
 }

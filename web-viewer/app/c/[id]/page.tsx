@@ -16,7 +16,7 @@ export default async function Page({ params }: Props) {
     .maybeSingle();
 
   if (cRes.error) {
-    return <FailureScreen />;
+    return <FailureScreen capsuleID={params.id} />;
   }
 
   const capsule = cRes.data as CapsuleRow | null;
@@ -33,6 +33,10 @@ export default async function Page({ params }: Props) {
     .eq("capsule_id", capsule.id)
     .order("created_at", { ascending: true });
 
+  if (mRes.error) {
+    return <FailureScreen capsuleID={params.id} />;
+  }
+
   const memories = (mRes.data ?? []) as MemoryRow[];
 
   return <CapsuleViewer capsule={capsule} memories={memories} />;
@@ -40,26 +44,18 @@ export default async function Page({ params }: Props) {
 
 function PrivateOrMissing({ capsuleID }: { capsuleID: string }) {
   return (
-    <main style={{
-      height: "100vh", display: "flex",
-      alignItems: "center", justifyContent: "center",
-      flexDirection: "column", gap: 12, textAlign: "center", padding: 32,
-    }}>
-      <div style={{
+    <main role="main" style={screenStyle}>
+      <div aria-hidden style={{
         width: 92, height: 92, borderRadius: "50%",
         border: "0.5px solid rgba(255,255,255,0.18)",
       }} />
       <div style={{ fontSize: 20 }}>This Capsule is private.</div>
-      <div style={{ opacity: 0.55, fontStyle: "italic" }}>
-        Sign in to see if you can open it.
+      <div style={{ opacity: 0.55, fontStyle: "italic", maxWidth: 320 }}>
+        Sign in with the email the owner shared with you, or ask them for an invite.
       </div>
       <a
         href={`/auth/sign-in?next=/c/${capsuleID}`}
-        style={{
-          marginTop: 16, padding: "12px 24px",
-          borderRadius: 999, background: "rgba(255,255,255,0.92)",
-          color: "#000",
-        }}
+        style={primaryButton}
       >
         Sign in
       </a>
@@ -67,13 +63,32 @@ function PrivateOrMissing({ capsuleID }: { capsuleID: string }) {
   );
 }
 
-function FailureScreen() {
+function FailureScreen({ capsuleID }: { capsuleID: string }) {
   return (
-    <main style={{
-      height: "100vh", display: "flex", alignItems: "center",
-      justifyContent: "center",
-    }}>
-      <div style={{ opacity: 0.55, fontStyle: "italic" }}>Something stirred.</div>
+    <main role="main" style={screenStyle}>
+      <div aria-hidden style={{
+        width: 92, height: 92, borderRadius: "50%",
+        border: "0.5px solid rgba(255,255,255,0.18)",
+      }} />
+      <div style={{ fontSize: 20 }}>Couldn’t open this Capsule.</div>
+      <div style={{ opacity: 0.55, fontStyle: "italic", maxWidth: 320 }}>
+        Something stirred on the way back. Try again in a moment.
+      </div>
+      <a href={`/c/${capsuleID}`} style={primaryButton}>
+        Try again
+      </a>
     </main>
   );
 }
+
+const screenStyle: React.CSSProperties = {
+  height: "100vh", display: "flex",
+  alignItems: "center", justifyContent: "center",
+  flexDirection: "column", gap: 14, textAlign: "center", padding: 32,
+};
+
+const primaryButton: React.CSSProperties = {
+  marginTop: 16, padding: "12px 24px",
+  borderRadius: 999, background: "rgba(255,255,255,0.92)",
+  color: "#000", fontSize: 15,
+};
