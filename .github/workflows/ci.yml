@@ -158,6 +158,7 @@ jobs:
       - name: Build
         working-directory: ios
         run: |
+          set +e
           set -o pipefail
           xcodebuild \
             -project Capsule.xcodeproj \
@@ -166,10 +167,31 @@ jobs:
             -configuration Debug \
             CODE_SIGNING_ALLOWED=NO \
             build 2>&1 | tee /tmp/xcodebuild-build.log
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" -ne 0 ]; then
+            echo ""
+            echo "::group::Compile errors (filtered)"
+            grep -E "error:|warning:|note:|FAILED:" /tmp/xcodebuild-build.log \
+              | head -120 || true
+            echo "::endgroup::"
+            {
+              echo "## iOS build failed"
+              echo ""
+              echo "<details><summary>Compile errors / warnings</summary>"
+              echo ""
+              echo '```'
+              grep -E "error:|warning:|note:|FAILED:" /tmp/xcodebuild-build.log \
+                | head -120 || true
+              echo '```'
+              echo "</details>"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$rc"
 
       - name: Test
         working-directory: ios
         run: |
+          set +e
           set -o pipefail
           xcodebuild \
             -project Capsule.xcodeproj \
@@ -178,16 +200,15 @@ jobs:
             -configuration Debug \
             CODE_SIGNING_ALLOWED=NO \
             test 2>&1 | tee /tmp/xcodebuild-test.log
-
-      - name: Surface compile errors
-        if: failure()
-        run: |
-          echo "=== compile errors / warnings (build) ==="
-          grep -E "error:|warning:|note:" /tmp/xcodebuild-build.log 2>/dev/null \
-            | head -80 || true
-          echo "=== compile errors / warnings (test) ==="
-          grep -E "error:|warning:|note:" /tmp/xcodebuild-test.log 2>/dev/null \
-            | head -80 || true
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" -ne 0 ]; then
+            echo ""
+            echo "::group::Test failures (filtered)"
+            grep -E "error:|warning:|FAILED:|XCTAssert|failed:" \
+              /tmp/xcodebuild-test.log | head -120 || true
+            echo "::endgroup::"
+          fi
+          exit "$rc"
 
       - name: Upload xcodebuild logs
         if: always()
