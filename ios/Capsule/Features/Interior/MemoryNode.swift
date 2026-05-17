@@ -124,6 +124,7 @@ private struct VoicePlayerView: View {
 private final class VoicePlayer: ObservableObject {
     @Published var isPlaying = false
     private var player: AVPlayer?
+    private var endObserver: NSObjectProtocol?
 
     func toggle(url: URL) {
         if isPlaying { stop() }
@@ -132,10 +133,14 @@ private final class VoicePlayer: ObservableObject {
             p.play()
             self.player = p
             isPlaying = true
-            NotificationCenter.default.addObserver(
+            // The Sendable closure can't touch @MainActor self directly;
+            // hop back to MainActor inside.
+            endObserver = NotificationCenter.default.addObserver(
                 forName: .AVPlayerItemDidPlayToEndTime,
                 object: p.currentItem, queue: .main
-            ) { [weak self] _ in self?.stop() }
+            ) { _ in
+                Task { @MainActor [weak self] in self?.stop() }
+            }
         }
     }
 
@@ -143,6 +148,10 @@ private final class VoicePlayer: ObservableObject {
         player?.pause()
         player = nil
         isPlaying = false
+        if let o = endObserver {
+            NotificationCenter.default.removeObserver(o)
+            endObserver = nil
+        }
     }
 }
 
