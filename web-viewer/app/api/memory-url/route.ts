@@ -24,6 +24,11 @@ export async function POST(req: Request) {
     .from("capsule-media")
     .createSignedUrl(memory.storage_path, 60 * 30);
 
-  if (sErr) return NextResponse.json({ error: sErr.message }, { status: 500 });
+  if (sErr || !signed?.signedUrl) {
+    return NextResponse.json(
+      { error: sErr?.message ?? "sign_failed" },
+      { status: 500 },
+    );
+  }
   return NextResponse.json({ url: signed.signedUrl, kind: memory.kind });
 }

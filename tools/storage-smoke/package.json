@@ -1,0 +1,13 @@
+{
+  "name": "capsule-storage-smoke",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": { "capsule-storage-smoke": "./index.mjs" },
+  "scripts": {
+    "start": "node index.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.4"
+  }
+}

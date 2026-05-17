@@ -1,5 +1,5 @@
 import { preflight, jsonResponse } from "../_shared/cors.ts";
-import { userClient, serviceClient } from "../_shared/supabase.ts";
+import { userClient } from "../_shared/supabase.ts";
 
 Deno.serve(async (req) => {
   const pf = preflight(req);
@@ -9,7 +9,9 @@ Deno.serve(async (req) => {
   const { memory_id } = await req.json().catch(() => ({}));
   if (!memory_id) return jsonResponse({ error: "memory_id required" }, 400);
 
-  // RLS-aware read first; if user can SELECT the memory row, they can view it.
+  // RLS-aware read: if the caller can SELECT the memory row, they may view
+  // its media. Sign with the *same* user-context client so RLS gates the
+  // sign step too — service-role would silently bypass it.
   const u = userClient(req);
   const { data: memory, error: mErr } = await u
     .from("memories")
@@ -21,11 +23,12 @@ Deno.serve(async (req) => {
   if (!memory) return jsonResponse({ error: "not_found" }, 404);
   if (!memory.storage_path) return jsonResponse({ error: "no_media" }, 400);
 
-  const svc = serviceClient();
-  const { data: signed, error: sErr } = await svc.storage
+  const { data: signed, error: sErr } = await u.storage
     .from("capsule-media")
     .createSignedUrl(memory.storage_path, 60 * 30);
 
-  if (sErr) return jsonResponse({ error: sErr.message }, 500);
+  if (sErr || !signed?.signedUrl) {
+    return jsonResponse({ error: sErr?.message ?? "sign_failed" }, 500);
+  }
   return jsonResponse({ url: signed.signedUrl, kind: memory.kind });
 });

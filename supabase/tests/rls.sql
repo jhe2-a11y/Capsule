@@ -96,3 +96,43 @@ begin
     raise notice 'second_claim_correctly_failed sqlstate=%', SQLSTATE;
   end;
 end $$;
+
+-- 6. Storage object visibility tracks the parent capsule's access mode.
+--    Synthetic objects use the (capsule_id, _, _, owner) shape that the
+--    real Storage service would produce; bucket_id matches our migration.
+insert into storage.buckets (id, name, public)
+  values ('capsule-media', 'capsule-media', false)
+  on conflict (id) do nothing;
+
+insert into storage.objects (bucket_id, name, owner)
+  values
+    ('capsule-media', 'cccc0000-0000-0000-0000-00000000000a/aaa.jpg',
+     '0000aaaa-0000-0000-0000-000000000001'),
+    ('capsule-media', 'cccc0000-0000-0000-0000-00000000000b/bbb.jpg',
+     '0000aaaa-0000-0000-0000-000000000001')
+  on conflict do nothing;
+
+-- 6a. Anon can read the object whose capsule is open.
+select public._as_anon();
+select count(*) = 1 as anon_sees_open_object
+  from storage.objects
+  where name = 'cccc0000-0000-0000-0000-00000000000a/aaa.jpg';
+
+-- 6b. Anon cannot read the object whose capsule is private.
+select count(*) = 0 as anon_blind_to_private_object
+  from storage.objects
+  where name = 'cccc0000-0000-0000-0000-00000000000b/bbb.jpg';
+
+-- 6c. A malformed object path doesn't raise an error from the regex
+--     helper. (Insert + immediate select; both must succeed.)
+insert into storage.objects (bucket_id, name, owner)
+  values ('capsule-media', 'not-a-uuid/x.jpg',
+          '0000aaaa-0000-0000-0000-000000000001')
+  on conflict do nothing;
+do $$
+begin
+  perform 1 from storage.objects where name = 'not-a-uuid/x.jpg';
+  raise notice 'malformed_path_no_error = t';
+exception when others then
+  raise notice 'malformed_path_no_error = f sqlstate=%', SQLSTATE;
+end $$;
