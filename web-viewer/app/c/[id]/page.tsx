@@ -1,4 +1,4 @@
-import { serverClient } from "@/lib/supabase/client";
+import { serverClient } from "@/lib/supabase/server";
 import type { CapsuleRow, MemoryRow } from "@/lib/depthField/types";
 import { CapsuleViewer } from "./CapsuleViewer";
 
